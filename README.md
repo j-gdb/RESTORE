@@ -4,6 +4,7 @@
 [![](https://img.shields.io/badge/USENIX%20Security-2025-e1dd72)](https://www.usenix.org/system/files/usenixsecurity25-chen-sizhe.pdf) [![](https://img.shields.io/badge/Paper-a8c66c)](http://arxiv.org/pdf/2402.06363)  [![](https://img.shields.io/badge/Website-097770)](https://sizhe-chen.github.io/StruQ-Website) [![](https://img.shields.io/badge/Poster-1b6535)](https://drive.google.com/file/d/1UUz4t43sGqFOPZqNxf8izR--iLAl16QX/view?usp=sharing) [![](https://img.shields.io/badge/Slides-f47a60)](https://drive.google.com/file/d/1FkTHIhGAaPtFwf91tgBad-sE7PEJnySJ/view?usp=sharing)
 
 This repo is forked from https://github.com/Sizhe-Chen/StruQ
+
 I have detached it to avoid any issues.
 
 Recent advances in Large Language Models (LLMs) enable exciting LLM-integrated applications, which perform text-based tasks by utilizing their advanced language capabilities. However, as LLMs have improved, so have the attacks against them. Prompt injection attack is listed as the #1 threat to LLM-integrated applications, where an LLM input contains a trusted prompt (instruction) and an untrusted data (user documents, web retrieval, results from API calls, etc) with potentially injected instructions (Ignore previous instructions and …) to arbitrarily manipulate the LLM.
