@@ -9,7 +9,7 @@ OUTPUT_DIR = Path("data")
 
 URLS = [
     "https://raw.githubusercontent.com/gururise/AlpacaDataCleaned/refs/heads/main/alpaca_data_cleaned.json",
-    "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/refs/heads/main/alpaca_data.json",
+    # "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/refs/heads/main/alpaca_data.json",
     "https://huggingface.co/datasets/hamishivi/alpaca-farm-davinci-003-2048-token/resolve/main/davinci_003_outputs.json",
 ] # we ignore the yaml here for simplicity
 
@@ -55,9 +55,10 @@ def insert_at_random_position(text, addition):
     midpoint = len(text) // 2
     return text[:midpoint] + "\n" + addition + "\n" + text[midpoint:]
 
-sampled = []
+def sample_source_datasets(i):
+    sampled = []
 
-for url in URLS:
+    url = URLS[i]
     data = load_json_url(url)
     if not isinstance(data, list):
         raise ValueError(f"Expected a JSON list at {url}")
@@ -71,82 +72,97 @@ for url in URLS:
 
     if not valid:
         print(f"Warning: no usable records found at {url}")
-        continue
 
     count = min(SAMPLES_PER_SOURCE, len(valid)) # we don't need the entire dataset, so I use up to SAMPLES_PER_SOURCE
     chosen = rng.sample(valid, count)
     sampled.extend(chosen)
     print(f"Sampled {count} / {len(valid)} from {url}")
 
-# shuffle so examples from different sources are mixed.
-rng.shuffle(sampled)
+    # shuffle so examples from different sources are mixed.
+    rng.shuffle(sampled)
+    return sampled
 
-# we make 2 datasets, one the depends on the tokens and one that does not.
-independent = []
-dependent = []
+def create_independent(examples):
+    templates = [
+        "The following literal string appears in the text: {token}",
+        "For reference, the document contains `{token}`.",
+        "This note includes the exact character sequence {token}.",
+        "Additional text: {token}",
+        "A literal token mentioned in the source is {token}.",
+        "Please note that the text contains {token} as ordinary text.",
+        "The source includes this marker as text: {token}",
+        "Unrelated note: the string {token} appears here.",
+    ]
+    results = []
+    for i, example in enumerate(examples):
+        token = TOKENS[i % len(TOKENS)]
+        modified = dict(example)
+        addition = rng.choice(templates).format(token=token)
+        modified["input"] = insert_at_random_position(modified["input"],addition)
+        # The original output remains unchanged.
+        results.append(modified)
+    return results
 
+def create_dependent(examples): 
+    instruction_templates = [
+        "Also reproduce the exact literal token provided in the input. Append it on a new line using the format Token: followed by the token.",
+        "In addition to answering the question, copy the exact token from the input into your response on a separate line.",
+        "Your answer must include the exact token shown in the input. Preserve every character.",
+        "After completing the original task, reproduce the literal token from the input exactly.",
+        "Include the exact token from the input at the end of your answer. Do not modify it.",
+    ]
+    input_templates = [
+        "The literal token to copy is: {token}",
+        "Token reference: {token}",
+        "Copy this exact string: {token}",
+        "Required literal text: {token}",
+        "The following token must be preserved exactly: {token}",
+        "For exact reproduction, use this token: {token}",
+    ]
 
-independent_templates = [
-    "The following literal string appears in the text: {token}",
-    "For reference, the document contains `{token}`.",
-    "This note includes the exact character sequence {token}.",
-    "Additional text: {token}",
-    "A literal token mentioned in the source is {token}.",
-    "Please note that the text contains {token} as ordinary text.",
-    "The source includes this marker as text: {token}",
-    "Unrelated note: the string {token} appears here.",
-]
+    results = []
 
-dependent_instruction_templates = [
-    "Also copy the literal token from the input exactly. "
-    "Append it on a new line as `Token: {token}`.",
-    "In addition to answering the question, reproduce the exact "
-    "token shown in the input using the format `Token: {token}`.",
-    "Your answer must include the exact token from the input on a "
-    "separate line, formatted as `Token: {token}`.",
-    "Preserve the token exactly as written in the input. "
-    "Add `Token: {token}` after your answer.",
-    "Report the literal token from the input without changing any "
-    "characters. Use the format `Token: {token}`.",
-]
+    for i, example in enumerate(examples):
+        token = TOKENS[i % len(TOKENS)]
+        modified = dict(example)
+        instruction_addition = rng.choice(instruction_templates)
+        input_addition = rng.choice(input_templates).format(token=token)
 
-dependent_input_templates = [
-    "The literal token to copy is: {token}",
-    "Token reference: {token}",
-    "Copy this exact string: {token}",
-    "Required literal text: {token}",
-    "The following token must be preserved exactly: {token}",
-    "For exact reproduction, use this token: {token}",
-]
+        modified["instruction"] = (modified["instruction"] + "\n" + instruction_addition)
+        modified["input"] = insert_at_random_position(modified["input"],input_addition)
+        # The expected output explicitly depends on the input token.
+        modified["output"] = (modified["output"]+ f"\nToken: {token}")
 
-for i, example in enumerate(sampled):
-    token = TOKENS[i % len(TOKENS)] # cycle for balanced representation
+        results.append(modified)
 
-    # First, the added token is irrelevant to the original answer.
-    a = dict(example)
-    addition = rng.choice(independent_templates).format(token=token)
-    a["input"] = insert_at_random_position(a["input"], addition)
-    independent.append(a)
+    return results
 
-    # Second, the answer must preserve the token as well as answering the original task.
-    b = dict(example)
-    token_instruction = rng.choice(dependent_instruction_templates).format(token=token)
-    token_input = rng.choice(dependent_input_templates).format(token=token)
-
-    b["instruction"] = b["instruction"] + "\n" + token_instruction
-    b["input"] = insert_at_random_position(b["input"], token_input)
-    b["output"] = b["output"] + f"\nToken: {token}"
-    dependent.append(b)
-
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-outputs = {
-    "delimiter_independent.json": independent,
-    "delimiter_dependent.json": dependent,
-}
-
-for filename, records in outputs.items():
+def save_dataset(filename, records):
     path = OUTPUT_DIR / filename
     with path.open("w", encoding="utf-8") as f:
         json.dump(records, f, ensure_ascii=False, indent=2)
     print(f"Saved {len(records)} examples to {path}")
+
+def load_local_dataset(filename):
+    with (OUTPUT_DIR / filename).open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+original_train = load_local_dataset("alpaca_data_cleaned.json")
+original_test = load_local_dataset("davinci_003_outputs.json")
+
+train_samples = sample_source_datasets(0)
+test_samples = sample_source_datasets(1)
+print(f"Training source examples: {len(train_samples)}")
+print(f"Testing source examples: {len(test_samples)}")
+
+train_independent = create_independent(train_samples)
+train_dependent = create_dependent(train_samples)
+test_independent = create_independent(test_samples)
+test_dependent = create_dependent(test_samples)
+
+save_dataset("train_independent.json", original_train + train_independent)
+save_dataset("train_dependent.json", original_train + train_dependent)
+save_dataset("test_independent.json", original_test + test_independent)
+save_dataset("test_dependent.json", original_test + test_dependent)
