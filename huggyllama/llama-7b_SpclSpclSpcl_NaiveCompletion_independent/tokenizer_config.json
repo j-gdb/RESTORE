@@ -1,0 +1,23 @@
+{
+  "add_prefix_space": null,
+  "backend": "tokenizers",
+  "bos_token": "<s>",
+  "clean_up_tokenization_spaces": false,
+  "eos_token": "</s>",
+  "extra_special_tokens": [
+    "\u0005",
+    "\u001c",
+    "\u001d",
+    "\u001e",
+    "\u001a"
+  ],
+  "is_local": false,
+  "local_files_only": false,
+  "model_max_length": 512,
+  "pad_token": "[PAD]",
+  "padding_side": "right",
+  "sp_model_kwargs": {},
+  "tokenizer_class": "LlamaTokenizer",
+  "unk_token": "<unk>",
+  "use_default_system_prompt": false
+}

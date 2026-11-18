@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence
 import torch
 import transformers
+import os
 from struq import SupervisedDataset
 from config import IGNORE_INDEX, DEFAULT_TOKENS, SPECIAL_DELM_TOKENS, TEXTUAL_DELM_TOKENS
 
@@ -129,8 +130,15 @@ def train():
     if not training_args.downsample and training_args.lr_scale:
         training_args.learning_rate /= data_module["train_dataset"].data_copy_count
         
-    trainer = transformers.Trainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
-    trainer.train()
+    last_checkpoint = None
+    if os.path.isdir(training_args.output_dir):
+        last_checkpoint = transformers.trainer_utils.get_last_checkpoint(training_args.output_dir)
+        print("Found checkpoint")
+    else:
+        print("No checkpoint found")
+
+    trainer = transformers.Trainer(model=model, processing_class=tokenizer, args=training_args, **data_module)
+    trainer.train(resume_from_checkpoint=last_checkpoint)
     trainer.save_state()
     trainer.save_model(output_dir=training_args.output_dir)
 

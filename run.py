@@ -6,6 +6,8 @@ import numpy as np
 import datetime
 import re
 
+from pathlib import Path
+
 MODEL_CONFIG = {
     'llama-7b': {
         'path': 'huggyllama/llama-7b',
@@ -21,14 +23,12 @@ MODEL_CONFIG = {
     }
 }
 
-def get_train_cmd(model, attack, data_path=None):
+def get_train_cmd(model, attack, data_path=None, test_path=None):
     master_port = 29550 + np.random.randint(0, 1000)
     current_t = datetime.datetime.fromtimestamp(datetime.datetime.now().timestamp()).strftime("%Y-%m-%d-%H-%M-%S")
     path = MODEL_CONFIG[model.replace('-Instruct', '').split('/')[1]]['path']
     lr = MODEL_CONFIG[model.replace('-Instruct', '').split('/')[1]]['lr']
     data = data_path or MODEL_CONFIG[model.replace('-Instruct', '').split('/')[1]]['data']
-    dataset_name = os.path.splitext(os.path.basename(data))[0]
-    output_dir = f'{model}_{dataset_name}_{attack}_{current_t}'
     epoch = MODEL_CONFIG[model.replace('-Instruct', '').split('/')[1]]['epoch']
 
     if 'llama-7b' in model.replace('-Instruct', ''):
@@ -41,16 +41,14 @@ def get_train_cmd(model, attack, data_path=None):
             --per_device_train_batch_size 4 \
             --per_device_eval_batch_size 4 \
             --gradient_accumulation_steps 8 \
-            --evaluation_strategy "no" \
-            --save_strategy "no" \
             --save_total_limit 1 \
             --learning_rate {lr} \
             --weight_decay 0. \
-            --warmup_ratio 0.03 \
             --lr_scheduler_type "cosine" \
             --logging_steps 1 \
             --fsdp "full_shard auto_wrap" \
-            --fsdp_transformer_layer_cls_to_wrap "LlamaDecoderLayer" \
+            --fsdp_config fsdp_config.json \
+            --gradient_checkpointing True \
             --tf32 True\
             --attack {attack}'
     elif 'Mistral-7B-v0.1' in model.replace('-Instruct', ''):
@@ -65,7 +63,6 @@ def get_train_cmd(model, attack, data_path=None):
             --per_device_train_batch_size 4 \
             --per_device_eval_batch_size 4 \
             --gradient_accumulation_steps 8 \
-            --evaluation_strategy "no" \
             --save_strategy "no" \
             --save_total_limit 1 \
             --learning_rate {lr} \
@@ -74,7 +71,8 @@ def get_train_cmd(model, attack, data_path=None):
             --lr_scheduler_type "cosine" \
             --logging_steps 1 \
             --fsdp "full_shard auto_wrap" \
-            --fsdp_transformer_layer_cls_to_wrap "MistralDecoderLayer" \
+            --fsdp_config fsdp_config.json \
+            --gradient_checkpointing True \
             --tf32 True\
             --attack {attack}\
             --lr_scale True\
@@ -89,8 +87,8 @@ def train_and_test():
     parser.add_argument('-t', '--time', type=float, default=4)
     parser.add_argument('-e', '--env', type=str, default='struq')
     parser.add_argument('--do_test', type=bool, default=True)
-    parser.add_argument("--data_path", type=str, default=None)
-    parser.add_argument("--test_data_path", type=str, default=None)
+    parser.add_argument('--data_path', type=Path, default=None)
+    parser.add_argument('--test_data_path', type=Path, default=None)
     args = parser.parse_args()
     
     output_dirs = []
@@ -101,9 +99,11 @@ def train_and_test():
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(log_dir, exist_ok=True)
 
-        slurm_prefix = f"#!/bin/bash\n\n#SBATCH --nodes=1\n#SBATCH --time=0{args.time}:00:00\n#SBATCH --gres=gpu:4\n#SBATCH --cpus-per-task=16\n#SBATCH --output={log_dir}/train_%j.out\n\nsource activate {args.env}\n"
+        with open('experiment_prefix.slrm') as f:
+            slurm_prefix = f.read()
+            slurm_prefix = slurm_prefix.replace('{LOG_DIR}', log_dir)
 
-        temporary_slurm_file = f'train_{args.model.replace('/', '_')}_{attack}.slurm'
+        temporary_slurm_file = f'train_{args.model.replace("/", "_")}_{attack}.slurm'
         with open(temporary_slurm_file, 'w') as f: f.write(slurm_prefix + cmd)
         os.system('sbatch ' + temporary_slurm_file)
         os.remove(temporary_slurm_file)
