@@ -27,9 +27,7 @@ for data_url in data_urls:
 if not args.model: exit()
 model_paths = [
     'huggyllama/llama-7b_SpclSpclSpcl_None_2025-03-12-01-01-20',
-    'mistralai/Mistral-7B-v0.1_SpclSpclSpcl_None_2025-03-12-01-02-08',
-    'huggyllama/llama-7b_SpclSpclSpcl_NaiveCompletion_2025-03-12-01-02-37',
-    'mistralai/Mistral-7B-v0.1_SpclSpclSpcl_NaiveCompletion_2025-03-15-03-25-16',
+    #'mistralai/Mistral-7B-v0.1_SpclSpclSpcl_None_2025-03-12-01-02-08',
 ]
 
 for model_path in model_paths:

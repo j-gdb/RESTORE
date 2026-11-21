@@ -6,8 +6,6 @@ import numpy as np
 import datetime
 import re
 
-from pathlib import Path
-
 MODEL_CONFIG = {
     'llama-7b': {
         'path': 'huggyllama/llama-7b',
@@ -23,12 +21,13 @@ MODEL_CONFIG = {
     }
 }
 
-def get_train_cmd(model, attack, data_path=None, test_path=None):
+def get_train_cmd(model, attack):
     master_port = 29550 + np.random.randint(0, 1000)
     current_t = datetime.datetime.fromtimestamp(datetime.datetime.now().timestamp()).strftime("%Y-%m-%d-%H-%M-%S")
+    output_dir = f'{model}_{attack}_{current_t}'
     path = MODEL_CONFIG[model.replace('-Instruct', '').split('/')[1]]['path']
     lr = MODEL_CONFIG[model.replace('-Instruct', '').split('/')[1]]['lr']
-    data = data_path or MODEL_CONFIG[model.replace('-Instruct', '').split('/')[1]]['data']
+    data = MODEL_CONFIG[model.replace('-Instruct', '').split('/')[1]]['data']
     epoch = MODEL_CONFIG[model.replace('-Instruct', '').split('/')[1]]['epoch']
 
     if 'llama-7b' in model.replace('-Instruct', ''):
@@ -41,14 +40,16 @@ def get_train_cmd(model, attack, data_path=None, test_path=None):
             --per_device_train_batch_size 4 \
             --per_device_eval_batch_size 4 \
             --gradient_accumulation_steps 8 \
+            --evaluation_strategy "no" \
+            --save_strategy "no" \
             --save_total_limit 1 \
             --learning_rate {lr} \
             --weight_decay 0. \
+            --warmup_ratio 0.03 \
             --lr_scheduler_type "cosine" \
             --logging_steps 1 \
             --fsdp "full_shard auto_wrap" \
-            --fsdp_config fsdp_config.json \
-            --gradient_checkpointing True \
+            --fsdp_transformer_layer_cls_to_wrap "LlamaDecoderLayer" \
             --tf32 True\
             --attack {attack}'
     elif 'Mistral-7B-v0.1' in model.replace('-Instruct', ''):
@@ -63,6 +64,7 @@ def get_train_cmd(model, attack, data_path=None, test_path=None):
             --per_device_train_batch_size 4 \
             --per_device_eval_batch_size 4 \
             --gradient_accumulation_steps 8 \
+            --evaluation_strategy "no" \
             --save_strategy "no" \
             --save_total_limit 1 \
             --learning_rate {lr} \
@@ -71,8 +73,7 @@ def get_train_cmd(model, attack, data_path=None, test_path=None):
             --lr_scheduler_type "cosine" \
             --logging_steps 1 \
             --fsdp "full_shard auto_wrap" \
-            --fsdp_config fsdp_config.json \
-            --gradient_checkpointing True \
+            --fsdp_transformer_layer_cls_to_wrap "MistralDecoderLayer" \
             --tf32 True\
             --attack {attack}\
             --lr_scale True\
@@ -87,23 +88,19 @@ def train_and_test():
     parser.add_argument('-t', '--time', type=float, default=4)
     parser.add_argument('-e', '--env', type=str, default='struq')
     parser.add_argument('--do_test', type=bool, default=True)
-    parser.add_argument('--data_path', type=Path, default=None)
-    parser.add_argument('--test_data_path', type=Path, default=None)
     args = parser.parse_args()
     
     output_dirs = []
     for attack in args.train_attack:
-        cmd = get_train_cmd(args.model, attack, args.data_path)
+        cmd = get_train_cmd(args.model, attack)
         output_dir = re.search(f'--output_dir (.+?)--num_train_epochs', cmd).group(1).replace(' ', '')
         log_dir = output_dir if os.path.exists(output_dir) else (output_dir + '-log')
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(log_dir, exist_ok=True)
 
-        with open('experiment_prefix.slrm') as f:
-            slurm_prefix = f.read()
-            slurm_prefix = slurm_prefix.replace('{LOG_DIR}', log_dir)
+        slurm_prefix = f"#!/bin/bash\n\n#SBATCH --nodes=1\n#SBATCH --time=0{args.time}:00:00\n#SBATCH --gres=gpu:4\n#SBATCH --cpus-per-task=16\n#SBATCH --output={log_dir}/train_%j.out\n\nsource activate {args.env}\n"
 
-        temporary_slurm_file = f'train_{args.model.replace("/", "_")}_{attack}.slurm'
+        temporary_slurm_file = f'train_{args.model.replace('/', '_')}_{attack}.slurm'
         with open(temporary_slurm_file, 'w') as f: f.write(slurm_prefix + cmd)
         os.system('sbatch ' + temporary_slurm_file)
         os.remove(temporary_slurm_file)
@@ -126,8 +123,7 @@ def train_and_test():
 
             for attack in args.test_attack:
                 slurm_prefix = f"#!/bin/bash\n\n#SBATCH --nodes=1\n#SBATCH --time=0{args.time}:00:00\n#SBATCH --gres=gpu:1\n#SBATCH --cpus-per-task=16\n#SBATCH --output={log_dir}/{attack}_%j.out\n\nsource activate {args.env}\n"
-                test_data = args.test_data_path or 'data/davinci_003_outputs.json'
-                cmd = f'python test.py --model_name_or_path {output_dir} --attack {attack} --data_path {test_data}' # you may add --defense to test zero-shot prompting defense baselines
+                cmd = f'python test.py --model_name_or_path {output_dir} --attack {attack}' # you may add --defense to test zero-shot prompting defense baselines
                 temporary_slurm_file = 'test_' + args.model.replace('/', '_') + output_dir.replace('/', '_') + '.slurm'
                 with open(temporary_slurm_file, 'w') as f: f.write(slurm_prefix + cmd)
                 os.system('sbatch ' + temporary_slurm_file)

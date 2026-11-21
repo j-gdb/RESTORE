@@ -1,8 +1,15 @@
+import os
 IGNORE_INDEX = -100
-DEFAULT_TOKENS = {'pad_token': '[PAD]', 'eos_token': '\x03', 'bos_token': '\x02', 'unk_token': '\x1a'}
+DEFAULT_TOKENS = {'pad_token': '[PAD]', 'eos_token': '</s>', 'bos_token': '<s>', 'unk_token': '<unk>'}
 TEXTUAL_DELM_TOKENS = ['instruction', 'input',  'response', '###',    ':']
-# [INST], [INPT], [RESP], [MARK], [COLN]
-SPECIAL_DELM_TOKENS = ['\x05',      '\x1c', '\x1d',   '\x1e', '\x1a']
+# separate the choice of which set for easier experiments
+SPECIAL_DELM_SETS = {
+    'original': ['[INST]', '[INPT]', '[RESP]', '[MARK]', '[COLN]'],
+    'control':  ['\x05',   '\x1c',   '\x1d',   '\x1e',   '\x1a'],
+}
+DELM_SET = os.environ.get('STRUQ_DELM', 'control')
+if DELM_SET not in SPECIAL_DELM_SETS: raise ValueError(f"STRUQ_DELM must be one of {list(SPECIAL_DELM_SETS)}, got {DELM_SET!r}")
+SPECIAL_DELM_TOKENS = SPECIAL_DELM_SETS[DELM_SET]
 FILTERED_TOKENS = SPECIAL_DELM_TOKENS + ['##']
 OTHER_DELM_TOKENS = {
     'mark': ['{s}', '|{s}|', '<{s}>', '[{s}]', '<|{s}|>', '[|{s}|]', '<[{s}]>', '\'\'\'{s}\'\'\'', '***{s}***'],

@@ -14,6 +14,7 @@ import subprocess
 from config import IGNORE_ATTACK_SENTENCES, PROMPT_FORMAT, DEFAULT_TOKENS, DELIMITERS, TEST_INJECTED_WORD, TEST_INJECTED_PROMPT, TEST_INJECTED_PROMPT_SPANISH, TEXTUAL_DELM_TOKENS, FILTERED_TOKENS, TEST_INJECTED_PROMPT_CHINESE, SPECIAL_DELM_TOKENS
 from struq import format_with_other_delimiters, _tokenize_fn, jload, jdump
 from train import smart_tokenizer_and_embedding_resize
+import frontend
 
 
 def load_model_and_tokenizer(model_path, tokenizer_path=None, device="cuda:0", **kwargs):
@@ -79,19 +80,15 @@ def test_model_output(llm_input, model, tokenizer):
     return in_response / len(llm_input), begin_with / len(llm_input), outputs
 
 def recursive_filter(s):
-    filtered = False
-    while not filtered:
-        for f in FILTERED_TOKENS:
-            if f in s: s = s.replace(f, '')
-        filtered = True
-        for f in FILTERED_TOKENS:
-            if f in s: filtered = False
-    return s
+    return frontend.filter(s)  # StruQ's original filter, now in frontend.py
 
-def form_llm_input(data, injection_method, prompt_format, apply_defensive_filter, defense, sample_ids=None):
+def form_llm_input(data, injection_method, prompt_format, apply_defensive_filter, defense, sample_ids=None, frontend_mode='filter'):
     llm_input = injection_method(prompt_format) if injection_method is hackaprompt else []
     for i, d in enumerate(data): 
         if injection_method is none:
+            #struq does not filter benign inputs, the escaping front end is lossless, so we apply it everywhere
+            if frontend_mode == 'escape' and apply_defensive_filter: 
+                d = dict(d, input=frontend.apply(d['input'], 'escape'))
             if d['input'] == '': llm_input.append(prompt_format['prompt_no_input'].format_map(d))
             else: llm_input.append(prompt_format['prompt_input'].format_map(d))
             continue
@@ -103,7 +100,7 @@ def form_llm_input(data, injection_method, prompt_format, apply_defensive_filter
         if sample_ids is not None: d_item['id'] = sample_ids[i]
         d_item = injection_method(d_item)
         
-        if apply_defensive_filter: d_item['input'] = recursive_filter(d_item['input'])  
+        if apply_defensive_filter: d_item['input'] = frontend.apply(d_item['input'], frontend_mode)
 
         llm_input_i = prompt_format['prompt_input'].format_map(d_item)
         if defense == 'none': 
@@ -280,6 +277,7 @@ def test_parser():
     parser.add_argument('-m', '--model_name_or_path', type=str)
     parser.add_argument('-a', '--attack', type=str, default=['completion_real', 'completion_realcmb'], nargs='+')
     parser.add_argument('-d', '--defense', type=str, default='none', choices=['none', 'sandwich', 'instructional', 'reminder', 'isolation', 'incontext'], help='Baseline test-time zero-shot prompting defense')
+    parser.add_argument('--frontend', type=str, default='filter', choices=list(frontend.FRONTENDS), help='How untrusted input is sanitized: StruQ filter (default), reversible escaping, or nothing')
     parser.add_argument('--device', type=str, default='0')
     parser.add_argument('--data_path', type=str, default='data/davinci_003_outputs.json')
     parser.add_argument('--openai_config_path', type=str, default='data/openai_configs.yaml')
@@ -317,29 +315,28 @@ def test():
     for a in args.attack:
         if a == 'gcg': test_gcg(args); continue
         data = jload(args.data_path)
+        fe_tag = '' if args.frontend == 'filter' else '-' + args.frontend
         if os.path.exists(args.model_name_or_path):
-            benign_response_name = args.model_name_or_path + '/predictions_on_' + os.path.basename(args.data_path)
+            benign_response_name = args.model_name_or_path + '/predictions' + fe_tag + '_on_' + os.path.basename(args.data_path)
         else:
             os.makedirs(args.model_name_or_path + '-log', exist_ok=True)
-            benign_response_name = args.model_name_or_path + '-log/predictions_on_' + os.path.basename(args.data_path)
+            benign_response_name = args.model_name_or_path + '-log/predictions' + fe_tag + '_on_' + os.path.basename(args.data_path)
         
         if not os.path.exists(benign_response_name) or a != 'none':
             llm_input = form_llm_input(
                 data, 
                 eval(a), 
                 PROMPT_FORMAT[frontend_delimiters], 
-                apply_defensive_filter=not (training_attacks == 'None' and len(args.model_name_or_path.split('/')[-1].split('_')) == 4),
-                defense=args.defense
-                )
+                apply_defensive_filter=not (training_attacks == 'None' and len(args.model_name_or_path.split('/')[-1].split('_')) == 4), defense=args.defense, frontend_mode=args.frontend)
 
             in_response, begin_with, outputs = test_model_output(llm_input, model, tokenizer)
             
         if a != 'none': # evaluate security
             print(f"\n{a} success rate {in_response} / {begin_with} (in-response / begin_with) on {args.model_name_or_path}, delimiters {frontend_delimiters}, training-attacks {training_attacks}, zero-shot defense {args.defense}\n")
             if os.path.exists(args.model_name_or_path):
-                log_path = args.model_name_or_path + '/' + a + '-' + args.defense + '-' + TEST_INJECTED_WORD + '.csv'
+                log_path = args.model_name_or_path + '/' + a + '-' + args.defense + fe_tag + '-' + TEST_INJECTED_WORD + '.csv'
             else:
-                log_path = args.model_name_or_path + '-log/' + a + '-' + args.defense + '-' + TEST_INJECTED_WORD + '.csv'
+                log_path = args.model_name_or_path + '-log/' + a + '-' + args.defense + fe_tag + '-' + TEST_INJECTED_WORD + '.csv'
             with open(log_path, "w") as outfile:
                 writer = csv.writer(outfile)
                 writer.writerows([[llm_input[i], s[0], s[1]] for i, s in enumerate(outputs)])
@@ -347,8 +344,8 @@ def test():
         else: # evaluate utility
             if not os.path.exists(benign_response_name): 
                 for i in range(len(data)):
-                    assert data[i]['input'] in llm_input[i]
-                    data[i]['output'] = outputs[i][0]
+                    assert frontend.apply(data[i]['input'], 'escape' if args.frontend == 'escape' else 'none') in llm_input[i]
+                    data[i]['output'] = frontend.postprocess_output(outputs[i][0], args.frontend)
                     data[i]['generator'] = args.model_name_or_path
                 jdump(data, benign_response_name)
             print('\nRunning AlpacaEval on', benign_response_name, '\n')
@@ -366,7 +363,7 @@ def test():
         else: summary_path = args.model_name_or_path + '-log/summary.tsv'
         if not os.path.exists(summary_path):
             with open(summary_path, "w") as outfile: outfile.write("attack\tin-response\tbegin-with\tdefense\n")
-        with open(summary_path, "a") as outfile: outfile.write(f"{a}\t{in_response}\t{begin_with}\t{args.defense}_{TEST_INJECTED_WORD}\n")
+        with open(summary_path, "a") as outfile: outfile.write(f"{a}\t{in_response}\t{begin_with}\t{args.defense}{fe_tag}_{TEST_INJECTED_WORD}\n")
 
 
 
